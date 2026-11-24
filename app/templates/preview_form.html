@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}预览核定 · {{ recording.title }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('web.recording_detail', recording_id=recording.id) }}">&larr; 返回 {{ recording.title }}</a></p>
+<h2>选择结算期预览</h2>
+<form method="post" class="card">
+  <div class="row">
+    <label>结算起日（含）<input type="date" name="period_start" required></label>
+    <label>结算止日（不含）<input type="date" name="period_end" required></label>
+  </div>
+  <div class="actions"><button type="submit">生成预览</button></div>
+</form>
+
+<h3>本录音当前申报（{{ declarations|length }} 单）</h3>
+<table>
+  <thead><tr><th>单号</th><th>起日</th><th>止日(不含)</th><th>份额</th><th>版本</th></tr></thead>
+  <tbody>
+  {% for d in declarations %}
+    <tr>
+      <td>{{ d.order_no }}</td><td>{{ d.start_date }}</td><td>{{ d.end_date }}</td>
+      <td>{% for name, value in d.shares.items() %}<span class="chip">{{ name }}：{{ value }}</span>{% endfor %}</td>
+      <td>v{{ d.version }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="muted">暂无申报。</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

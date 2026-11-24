@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>录音列表</h2>
+<p>录入一首录音的申报，每首最多 12 单；随后按结算期预览最少退单并发布核定版。</p>
+<table>
+  <thead><tr><th>录音</th><th>创建时间</th><th>操作</th></tr></thead>
+  <tbody>
+  {% for r in recordings %}
+    <tr>
+      <td>{{ r.title }}</td>
+      <td>{{ r.created_at }}</td>
+      <td><a href="{{ url_for('web.recording_detail', recording_id=r.id) }}">进入</a></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="3" class="muted">暂无录音，请先录入申报（会自动创建录音）。</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h3>按单号录入新申报</h3>
+<form method="post" action="{{ url_for('web.create_recording_route') }}" class="inline-form">
+  <label>录音名称 <input name="title" required placeholder="如：深夜电台"></label>
+  <button>新建录音</button>
+</form>
+{% endblock %}

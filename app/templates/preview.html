@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}预览结果{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('web.recording_detail', recording_id=recording.id) }}">&larr; 返回 {{ recording.title }}</a></p>
+<h2>核定预览 · {{ recording.title }}</h2>
+<p class="muted">结算期：{{ preview.period_start }}（含） ~ {{ preview.period_end }}（不含）
+  · 纳入核定申报 {{ preview.result.checked_order_count }} 单 · 预览号 {{ preview.token }}</p>
+
+{% if stale %}
+<div class="flash error">资料不一致：预览后该录音在结算期内的申报已被新增或更正，请重新预览计算后再确认。</div>
+{% endif %}
+
+{% if preview.result.feasible %}
+  <div class="flash ok">存在最少退单方案：退回 {{ preview.result.returned|length }} 单，保留 {{ preview.result.retain|length }} 单。</div>
+  <div class="grid2">
+    <div>
+      <h3>退单清单（最少）</h3>
+      <ul>
+        {% for o in preview.result.returned %}<li>{{ o }}</li>{% else %}<li class="muted">无需退单</li>{% endfor %}
+      </ul>
+      <h3>保留单据</h3>
+      <ul>{% for o in preview.result.retain %}<li>{{ o }}</li>{% endfor %}</ul>
+    </div>
+    <div>
+      <h3>按日期分段的剩余份额</h3>
+      <table>
+        <thead><tr><th>段起日(含)</th><th>段止日(不含)</th><th>权利人万分比</th></tr></thead>
+        <tbody>
+        {% for s in preview.result.segments %}
+          <tr>
+            <td>{{ s.start_date }}</td><td>{{ s.end_date }}</td>
+            <td>{% for name, value in s.shares.items() %}<span class="chip">{{ name }}：{{ value }}</span>{% endfor %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <form method="post" action="{{ url_for('web.preview_confirm', token=preview.token) }}" class="card">
+    <label class="check"><input type="checkbox" name="simulate_fail" value="1"> 模拟写入失败（演示失败后回退上一版）</label>
+    <div class="actions">
+      <button type="submit" {% if stale %}disabled title="资料不一致，请先重新预览"{% endif %}>确认并发布核定版</button>
+      <a class="button secondary" href="{{ url_for('web.declaration_new', recording_id=recording.id) }}">预览期间更正/补录申报</a>
+      <a class="button secondary" href="{{ url_for('web.preview_new', recording_id=recording.id) }}">重新预览</a>
+    </div>
+  </form>
+{% else %}
+  <div class="flash error">无解：{{ preview.result.reason }}</div>
+  <p>申报只能整单取舍，不存在覆盖整个结算期且全部通过校验的保留组合。请更正申报后重新预览；在此之前仍可取用同一录音、同一结算期的上一版核定版。</p>
+  <h3>分段诊断</h3>
+  <table>
+    <thead><tr><th>段起日(含)</th><th>段止日(不含)</th><th>结果</th><th>原因 / 份额</th></tr></thead>
+    <tbody>
+    {% for s in preview.result.segments %}
+      <tr>
+        <td>{{ s.start_date }}</td><td>{{ s.end_date }}</td>
+        <td>{% if s.ok %}<span class="ok">通过</span>{% else %}<span class="bad">无法供数</span>{% endif %}</td>
+        <td>{{ s.reason or '' }}
+          {% for name, value in s.shares.items() %}<span class="chip">{{ name }}：{{ value }}</span>{% endfor %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="actions">
+    <a class="button" href="{{ url_for('web.preview_new', recording_id=recording.id) }}">重新预览</a>
+    <a class="button secondary" href="{{ url_for('web.versions_index') }}">取上一版核定版</a>
+  </div>
+{% endif %}
+{% endblock %}

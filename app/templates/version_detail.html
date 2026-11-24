@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}核定版 v{{ version.version_no }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('web.recording_detail', recording_id=recording.id) }}">&larr; 返回 {{ recording.title }}</a></p>
+<h2>核定版取数 · {{ recording.title }}</h2>
+<table class="meta">
+  <tr><th>结算期</th><td>{{ version.period_start }}（含） ~ {{ version.period_end }}（不含）</td></tr>
+  <tr><th>版本号</th><td>v{{ version.version_no }}（同录音同结算期递增）</td></tr>
+  <tr><th>状态</th><td>{{ version.status }}</td></tr>
+  <tr><th>发布时间</th><td>{{ version.created_at }}</td></tr>
+  <tr><th>保留单据</th><td>{{ retained | join('、') }}</td></tr>
+  <tr><th>退回单据</th><td>{{ returned | join('、') if returned else '无' }}</td></tr>
+  <tr><th>资料指纹</th><td><code>{{ version.input_signature[:16] }}…</code></td></tr>
+</table>
+
+<h3>按日期分段的核定份额（入仓取数口径）</h3>
+<table>
+  <thead><tr><th>段起日(含)</th><th>段止日(不含)</th><th>权利人万分比</th><th>合计</th></tr></thead>
+  <tbody>
+  {% for s in segments %}
+    <tr>
+      <td>{{ s.start_date }}</td><td>{{ s.end_date }}</td>
+      <td>{% for name, value in s.shares.items() %}<span class="chip">{{ name }}：{{ value }}</span>{% endfor %}</td>
+      <td>{{ s.shares.values() | sum }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p><a class="button" href="{{ url_for('web.version_api', version_id=version.id) }}">查看 JSON</a></p>
+{% endblock %}

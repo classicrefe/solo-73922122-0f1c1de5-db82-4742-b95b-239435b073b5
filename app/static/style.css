@@ -1,0 +1,39 @@
+* { box-sizing: border-box; }
+body {
+  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  margin: 0; color: #1f2933; background: #f5f7fa;
+}
+header { background: #1f3a5f; color: #fff; padding: 16px 28px; }
+header h1 { margin: 0 0 8px; font-size: 20px; }
+nav a { color: #cfe0ff; margin-right: 18px; text-decoration: none; }
+nav a:hover { color: #fff; }
+main { max-width: 1080px; margin: 24px auto; padding: 0 20px; }
+footer { text-align: center; color: #8a97a6; font-size: 12px; padding: 24px; }
+h2 { margin-top: 0; }
+table { width: 100%; border-collapse: collapse; background: #fff; margin: 10px 0 22px; }
+th, td { border: 1px solid #dde3ea; padding: 8px 10px; text-align: left; font-size: 14px; vertical-align: top; }
+th { background: #eef2f7; }
+table.meta th { width: 130px; background: #f7f9fc; }
+.card { background: #fff; border: 1px solid #dde3ea; border-radius: 8px; padding: 18px; margin: 14px 0; }
+label { display: block; margin: 8px 0; font-size: 14px; }
+input, button, .button {
+  font: inherit; padding: 7px 10px; border-radius: 6px;
+  border: 1px solid #b8c2cc; background: #fff;
+}
+button, .button { background: #1f6feb; color: #fff; border-color: #1f6feb; cursor: pointer; text-decoration: none; display: inline-block; }
+button:disabled { background: #9aa7b4; border-color: #9aa7b4; cursor: not-allowed; }
+.secondary { background: #eef2f7; color: #1f3a5f; border-color: #b8c2cc; }
+.row { display: flex; gap: 18px; }
+.row label { flex: 1; }
+.actions { margin-top: 14px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.inline-form { display: flex; gap: 10px; align-items: end; background: #fff; padding: 14px; border: 1px solid #dde3ea; border-radius: 8px; }
+.flash { padding: 10px 14px; border-radius: 6px; margin: 10px 0; }
+.flash.ok { background: #e3f6e8; border: 1px solid #7fd196; }
+.flash.error { background: #fdeaea; border: 1px solid #e58b8b; }
+.chip { display: inline-block; background: #eef2f7; border-radius: 12px; padding: 2px 10px; margin: 2px 4px 2px 0; font-size: 13px; }
+.muted { color: #8a97a6; }
+.ok { color: #1a7f37; font-weight: 600; }
+.bad { color: #c0392b; font-weight: 600; }
+.grid2 { display: grid; grid-template-columns: 1fr 1.6fr; gap: 20px; }
+.check { display: inline-flex; gap: 6px; align-items: center; }
+code { font-size: 12px; }

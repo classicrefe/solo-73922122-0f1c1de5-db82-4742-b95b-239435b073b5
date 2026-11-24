@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}{% if decl %}更正申报 {{ decl.order_no }}{% else %}录入申报{% endif %}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('web.recording_detail', recording_id=recording.id) }}">&larr; 返回 {{ recording.title }}</a></p>
+<h2>{% if decl %}更正申报 {{ decl.order_no }}{% else %}录入新申报{% endif %}</h2>
+<form method="post" class="card">
+  <label>单号
+    <input name="order_no" required value="{{ decl.order_no if decl else '' }}"
+           {% if decl %}readonly{% endif %} placeholder="如 D001">
+  </label>
+  <div class="row">
+    <label>起日（含）
+      <input type="date" name="start_date" required value="{{ decl.start_date if decl else '' }}">
+    </label>
+    <label>止日（不含）
+      <input type="date" name="end_date" required value="{{ decl.end_date if decl else '' }}">
+    </label>
+  </div>
+
+  <h3>各权利人整数万分比（单内合计须为 10000）</h3>
+  <table id="share-table">
+    <thead><tr><th>权利人</th><th>万分比</th><th></th></tr></thead>
+    <tbody>
+      {% if decl %}
+        {% for name, value in decl.shares.items() %}
+        <tr class="share-row">
+          <td><input name="holder_name" value="{{ name }}" required></td>
+          <td><input name="holder_value" type="number" min="0" max="10000" step="1" value="{{ value }}" required></td>
+          <td><button type="button" class="remove-row">删除</button></td>
+        </tr>
+        {% endfor %}
+      {% else %}
+        <tr class="share-row">
+          <td><input name="holder_name" required></td>
+          <td><input name="holder_value" type="number" min="0" max="10000" step="1" required></td>
+          <td><button type="button" class="remove-row">删除</button></td>
+        </tr>
+      {% endif %}
+    </tbody>
+  </table>
+  <p>合计：<strong id="share-sum">0</strong> / 10000</p>
+  <button type="button" id="add-row">添加权利人</button>
+  <div class="actions">
+    <button type="submit">{% if decl %}确认更正（旧版留档）{% else %}保存申报{% endif %}</button>
+  </div>
+</form>
+
+{% if history %}
+<h3>历史版本（留档）</h3>
+<table>
+  <thead><tr><th>版本</th><th>起日</th><th>止日</th><th>份额</th><th>变更时间</th></tr></thead>
+  <tbody>
+  {% for h in history %}
+    <tr>
+      <td>v{{ h.version }}</td>
+      <td>{{ h.start_date }}</td>
+      <td>{{ h.end_date }}</td>
+      <td>{{ h.shares_json }}</td>
+      <td>{{ h.changed_at }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<script>
+function recalcSum() {
+  let sum = 0;
+  document.querySelectorAll('input[name="holder_value"]').forEach(i => { sum += parseInt(i.value || 0, 10); });
+  document.getElementById('share-sum').textContent = sum;
+}
+document.getElementById('add-row').addEventListener('click', () => {
+  const tr = document.createElement('tr');
+  tr.className = 'share-row';
+  tr.innerHTML = '<td><input name="holder_name" required></td>' +
+    '<td><input name="holder_value" type="number" min="0" max="10000" step="1" required></td>' +
+    '<td><button type="button" class="remove-row">删除</button></td>';
+  document.querySelector('#share-table tbody').appendChild(tr);
+  bindRows();
+  recalcSum();
+});
+function bindRows() {
+  document.querySelectorAll('.remove-row').forEach(btn => {
+    btn.onclick = () => { btn.closest('tr').remove(); recalcSum(); };
+  });
+  document.querySelectorAll('input[name="holder_value"]').forEach(i => i.oninput = recalcSum);
+}
+bindRows();
+recalcSum();
+</script>
+{% endblock %}

@@ -1,0 +1,19 @@
+services:
+  web:
+    build: .
+    image: recording-settlement:latest
+    ports:
+      - "8000:8000"
+    environment:
+      APP_DB: /data/settlement.db
+      SECRET_KEY: demo-secret-key
+    volumes:
+      - settlement-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  settlement-data:

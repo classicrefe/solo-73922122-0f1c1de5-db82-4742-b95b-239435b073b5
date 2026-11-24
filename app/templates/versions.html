@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}核定版取数{% endblock %}
+{% block content %}
+<h2>核定版取数</h2>
+<p>按录音查看已发布核定版；无解或写入失败时，同一录音、同一结算期的上一版仍可正常取数。</p>
+{% for r in recordings %}
+  {% set versions = r.id | versions_of %}
+  <h3>{{ r.title }}</h3>
+  <table>
+    <thead><tr><th>结算期</th><th>版本</th><th>状态</th><th>发布时间</th><th>操作</th></tr></thead>
+    <tbody>
+    {% for v in versions %}
+      <tr>
+        <td>{{ v.period_start }} ~ {{ v.period_end }}</td>
+        <td>v{{ v.version_no }}</td>
+        <td>{{ v.status }}</td>
+        <td>{{ v.created_at }}</td>
+        <td>
+          <a href="{{ url_for('web.version_show', version_id=v.id) }}">页面取数</a> ·
+          <a href="{{ url_for('web.version_api', version_id=v.id) }}">JSON</a>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="muted">暂无核定版。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p class="muted">暂无录音。</p>
+{% endfor %}
+{% endblock %}
