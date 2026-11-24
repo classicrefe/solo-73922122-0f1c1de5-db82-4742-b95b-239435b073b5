@@ -11,7 +11,25 @@
   <tr><th>保留单据</th><td>{{ retained | join('、') }}</td></tr>
   <tr><th>退回单据</th><td>{{ returned | join('、') if returned else '无' }}</td></tr>
   <tr><th>资料指纹</th><td><code>{{ version.input_signature[:16] }}…</code></td></tr>
+  <tr><th>仓数据验收</th>
+    <td>
+      {% if acceptance_summary %}
+        {% if acceptance_summary.passed %}
+          <span class="ok">通过</span>
+        {% else %}
+          <span class="bad">未通过</span>（{{ acceptance_summary.mismatch_count }} 处区间差异）
+        {% endif %}
+        · 已入账回执 {{ receipt_count }} 份
+      {% else %}
+        <span class="muted">尚未验收（无回执）</span>
+      {% endif %}
+    </td>
+  </tr>
 </table>
+
+<div class="actions">
+  <a class="button" href="{{ url_for('web.acceptance_view', version_id=version.id) }}">验收入口（上传回执 CSV）</a>
+</div>
 
 <h3>按日期分段的核定份额（入仓取数口径）</h3>
 <table>

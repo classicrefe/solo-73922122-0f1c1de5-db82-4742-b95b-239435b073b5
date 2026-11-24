@@ -62,6 +62,50 @@ CREATE TABLE IF NOT EXISTS preview_snapshot (
     input_signature TEXT NOT NULL,
     created_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- 验收作用域 = 录音 × 结算期：仓里实际留下的份额按结算期留存，
+-- 发布新裁定版本后回执与净额继续有效（差异按新版核定值重新核对）。
+-- 回执以「回执号 + 内容哈希」去重：同号同内容只计一次，同号异内容拒绝。
+CREATE TABLE IF NOT EXISTS warehouse_receipt (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    recording_id INTEGER NOT NULL REFERENCES recording(id),
+    period_start TEXT NOT NULL,
+    period_end   TEXT NOT NULL,
+    receipt_no   TEXT NOT NULL,
+    content_sha  TEXT NOT NULL,
+    line_count   INTEGER NOT NULL,
+    received_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (recording_id, period_start, period_end, receipt_no)
+);
+
+-- 净额区间表：同一范围、同一权利人、同一万分比，
+-- 入仓 +1 / 冲销 -1；各区间互不重叠，且只保存非零净额。
+CREATE TABLE IF NOT EXISTS warehouse_interval (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    recording_id INTEGER NOT NULL REFERENCES recording(id),
+    period_start TEXT NOT NULL,
+    period_end   TEXT NOT NULL,
+    holder       TEXT NOT NULL,
+    share_value  INTEGER NOT NULL,
+    start_date   TEXT NOT NULL,
+    end_date     TEXT NOT NULL,
+    net_count    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_warehouse_interval
+    ON warehouse_interval (recording_id, period_start, period_end,
+                           holder, share_value, start_date);
+
+-- 每个核定版的最新验收结果（回执入账时与回执同事务更新）
+CREATE TABLE IF NOT EXISTS acceptance_check (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    version_id     INTEGER NOT NULL REFERENCES settlement_version(id),
+    passed         INTEGER NOT NULL,
+    mismatch_count INTEGER NOT NULL,
+    receipt_count  INTEGER NOT NULL,
+    result_json    TEXT NOT NULL,
+    checked_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (version_id)
+);
 """
 
 
@@ -73,6 +117,7 @@ def get_db() -> sqlite3.Connection:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 15000")
         g.db = conn
     return g.db
 
@@ -291,12 +336,14 @@ def publish_version(recording_id: int, start: str, end: str, result: dict,
                 signature,
             ),
         )
-        conn.commit()
         row = conn.execute(
             "SELECT id FROM settlement_version WHERE recording_id = ? "
             "AND period_start = ? AND period_end = ? AND version_no = ?",
             (recording_id, start, end, version_no),
         ).fetchone()
+        # 以新版核定值对既有仓数据立即核对，验收与发布同事务生效
+        _refresh_check(conn, get_version(row["id"]))
+        conn.commit()
         return row["id"]
     except Exception:
         conn.rollback()
@@ -327,3 +374,224 @@ def input_signature(declarations: list[dict], start: str, end: str) -> str:
         ensure_ascii=False, sort_keys=True,
     ).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
+
+
+# ---------- 验收（回执 / 净额区间 / 核对结果） ----------
+
+def _scope(version) -> tuple:
+    return (version["recording_id"], version["period_start"], version["period_end"])
+
+
+def list_warehouse_intervals(version_id: int) -> list[dict]:
+    version = get_version(version_id)
+    if version is None:
+        return []
+    rows = get_db().execute(
+        """SELECT * FROM warehouse_interval
+           WHERE recording_id = ? AND period_start = ? AND period_end = ?
+           ORDER BY holder, share_value, start_date""",
+        _scope(version),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_acceptance(version_id: int) -> dict | None:
+    row = get_db().execute(
+        "SELECT * FROM acceptance_check WHERE version_id = ?", (version_id,)
+    ).fetchone()
+    if not row:
+        return None
+    return _check_row(row)
+
+
+def _check_row(row) -> dict:
+    result = json.loads(row["result_json"])
+    result["checked_at"] = row["checked_at"]
+    result["receipt_count"] = row["receipt_count"]
+    return result
+
+
+def list_receipts(version_id: int) -> list[dict]:
+    version = get_version(version_id)
+    if version is None:
+        return []
+    rows = get_db().execute(
+        """SELECT * FROM warehouse_receipt
+           WHERE recording_id = ? AND period_start = ? AND period_end = ?
+           ORDER BY received_at, id""",
+        _scope(version),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def latest_acceptance(version_id: int) -> dict | None:
+    """该结算期最近一次核对结果（用于核对结果与回执同事务、同时可查）。"""
+    version = get_version(version_id)
+    if version is None:
+        return None
+    row = get_db().execute(
+        """SELECT c.* FROM acceptance_check c
+           JOIN settlement_version v ON v.id = c.version_id
+           WHERE v.recording_id = ? AND v.period_start = ? AND v.period_end = ?
+           ORDER BY c.id DESC LIMIT 1""",
+        _scope(version),
+    ).fetchone()
+    return _check_row(row) if row else None
+
+
+def _refresh_scope(conn, scope) -> None:
+    """回执变动后，重算该结算期所有核定版的核对结果。
+
+    仓数据按结算期共享；同一份新回执可能同时改变新旧版本的差异，
+    因此同时收回/恢复各版的通过标记。
+    """
+    rows = conn.execute(
+        """SELECT * FROM settlement_version
+           WHERE recording_id = ? AND period_start = ? AND period_end = ?
+           ORDER BY version_no""",
+        scope,
+    ).fetchall()
+    for row in rows:
+        _refresh_check(conn, row)
+
+
+def _refresh_check(conn, version) -> dict:
+    """按当前净额区间重算核对结果并写入（不重放回执）。"""
+    from .acceptance import compute_check
+
+    segments = json.loads(version["segments_json"])
+    scope = _scope(version)
+    intervals = [
+        dict(r) for r in conn.execute(
+            """SELECT * FROM warehouse_interval
+               WHERE recording_id = ? AND period_start = ? AND period_end = ?
+               ORDER BY holder, share_value, start_date""",
+            scope,
+        ).fetchall()
+    ]
+    receipt_count = conn.execute(
+        """SELECT COUNT(*) AS c FROM warehouse_receipt
+           WHERE recording_id = ? AND period_start = ? AND period_end = ?""",
+        scope,
+    ).fetchone()["c"]
+    result = compute_check(
+        version["period_start"], version["period_end"],
+        segments, intervals, receipt_count,
+    )
+    conn.execute(
+        """INSERT INTO acceptance_check
+           (version_id, passed, mismatch_count, receipt_count, result_json, checked_at)
+           VALUES (?, ?, ?, ?, ?, datetime('now'))
+           ON CONFLICT (version_id) DO UPDATE SET
+             passed = excluded.passed,
+             mismatch_count = excluded.mismatch_count,
+             receipt_count = excluded.receipt_count,
+             result_json = excluded.result_json,
+             checked_at = excluded.checked_at""",
+        (
+            version["id"],
+            1 if result["passed"] else 0,
+            result["mismatch_count"],
+            receipt_count,
+            json.dumps(result, ensure_ascii=False),
+        ),
+    )
+    return result
+
+
+def ingest_receipt(version_id: int, receipt_no: str, content_sha: str,
+                   lines: list[dict], fail: bool = False) -> tuple[str, dict]:
+    """回执入账：回执行与核对结果在同一事务中生效。
+
+    返回 (state, 核对结果)；state ∈ {"applied", "duplicate"}。
+    同号异内容抛 ReceiptConflict。写入失败时整体回滚（fail=True 用于
+    演示失败后重传），调用方可用同一回执号重传，原核对结果保持不变。
+    """
+    from .acceptance import ReceiptConflict, apply_line_delta
+
+    conn = get_db()
+    version = get_version(version_id)
+    if version is None:
+        raise ReceiptErrorLike("核定版不存在")
+    scope = _scope(version)
+
+    # 先快速判定同号；再做写事务，避免重复回执进入写锁
+    existing = conn.execute(
+        """SELECT content_sha FROM warehouse_receipt
+           WHERE recording_id = ? AND period_start = ? AND period_end = ?
+             AND receipt_no = ?""",
+        (*scope, receipt_no),
+    ).fetchone()
+    if existing is not None:
+        if existing["content_sha"] != content_sha:
+            raise ReceiptConflict(
+                f"回执号 {receipt_no} 已入账过不同内容，本次拒绝入账"
+            )
+        return "duplicate", refresh_acceptance(version_id)
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+    except sqlite3.OperationalError as exc:  # 并发写库超时
+        raise ReceiptErrorLike(f"数据库繁忙，请稍后重传：{exc}") from exc
+
+    try:
+        # 写锁内再查一次，兼容并发同号上传
+        existing = conn.execute(
+            """SELECT content_sha FROM warehouse_receipt
+               WHERE recording_id = ? AND period_start = ? AND period_end = ?
+                 AND receipt_no = ?""",
+            (*scope, receipt_no),
+        ).fetchone()
+        if existing is not None:
+            conn.rollback()
+            if existing["content_sha"] == content_sha:
+                return "duplicate", refresh_acceptance(version_id)
+            raise ReceiptConflict(
+                f"回执号 {receipt_no} 已入账过不同内容，本次拒绝入账"
+            )
+
+        for line in lines:
+            delta = 1 if line["action"] == "in" else -1
+            apply_line_delta(
+                conn, scope, line["holder"], line["value"],
+                line["start_date"], line["end_date"], delta,
+            )
+
+        conn.execute(
+            """INSERT INTO warehouse_receipt
+               (recording_id, period_start, period_end,
+                receipt_no, content_sha, line_count)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (*scope, receipt_no, content_sha, len(lines)),
+        )
+        if fail:
+            raise sqlite3.OperationalError("模拟写入失败")
+        _refresh_scope(conn, scope)
+        result = _refresh_check(conn, version)
+        conn.commit()
+        return "applied", result
+    except ReceiptConflict:
+        conn.rollback()
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def refresh_acceptance(version_id: int) -> dict:
+    """重新核对（不重放回执，仅按当前净额区间重算）。"""
+    conn = get_db()
+    version = get_version(version_id)
+    if version is None:
+        raise ValueError("核定版不存在")
+    try:
+        result = _refresh_check(conn, version)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return result
+
+
+class ReceiptErrorLike(ValueError):
+    """db 层可披露的业务错误。"""

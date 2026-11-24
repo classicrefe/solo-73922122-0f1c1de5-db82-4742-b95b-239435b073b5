@@ -16,9 +16,10 @@
 """
 from __future__ import annotations
 
+import itertools
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
-from typing import Iterable
 
 
 def parse_iso_date(value: str) -> date:
@@ -33,7 +34,7 @@ def split_segments(start: str, end: str, declarations: list[dict]) -> list[tuple
             bounds.add(max(start, decl["start_date"]))
             bounds.add(min(end, decl["end_date"]))
     ordered = sorted(bounds)
-    return [(a, b) for a, b in zip(ordered, ordered[1:]) if a < b]
+    return [(a, b) for a, b in itertools.pairwise(ordered) if a < b]
 
 
 def covering(declarations: Iterable[dict], seg_start: str, seg_end: str) -> list[dict]:

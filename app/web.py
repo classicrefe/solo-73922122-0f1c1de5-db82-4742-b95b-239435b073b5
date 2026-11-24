@@ -1,4 +1,4 @@
-"""Web 路由：申报录入/更正、预览核定、确认发布、版本取数。"""
+"""Web 路由：申报录入/更正、预览核定、确认发布、版本取数、仓数据验收。"""
 from __future__ import annotations
 
 import json
@@ -6,10 +6,18 @@ import secrets
 import sqlite3
 
 from flask import (
-    Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for,
+    Blueprint,
+    Response,
+    abort,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    url_for,
 )
 
-from . import db
+from . import acceptance, db
 from .engine import parse_iso_date, solve
 
 bp = Blueprint("web", __name__)
@@ -113,7 +121,7 @@ def declaration_new(recording_id: int):
             flash(f"单号 {order_no} 已存在，请使用更正功能", "error")
             return render_template("declaration_form.html", recording=recording, decl=None)
         try:
-            decl, _ = db.upsert_declaration(
+            _decl, _ = db.upsert_declaration(
                 recording_id, order_no, period[0], period[1], shares
             )
         except ValueError as exc:
@@ -259,6 +267,8 @@ def version_show(version_id: int):
         retained=json.loads(version["retained_orders"]),
         returned=json.loads(version["returned_orders"]),
         segments=json.loads(version["segments_json"]),
+        acceptance_summary=db.latest_acceptance(version_id),
+        receipt_count=len(db.list_receipts(version_id)),
     )
 
 
@@ -279,3 +289,107 @@ def version_api(version_id: int):
         "input_signature": version["input_signature"],
         "created_at": version["created_at"],
     })
+
+
+# ---------- 仓数据验收 ----------
+
+def _acceptance_payload(version_id: int) -> dict:
+    version = db.get_version(version_id)
+    if version is None:
+        abort(404)
+    result = db.get_acceptance(version_id)
+    if result is None:
+        # 首次访问时按当前净额区间生成（无回执时核对结果应为通过）
+        result = db.refresh_acceptance(version_id)
+    return {
+        "version_id": version["id"],
+        "version_no": version["version_no"],
+        "period": [version["period_start"], version["period_end"]],
+        **result,
+    }
+
+
+@bp.route("/versions/<int:version_id>/acceptance", methods=["GET", "POST"])
+def acceptance_view(version_id: int):
+    version = db.get_version(version_id)
+    if version is None:
+        abort(404)
+    recording = _load_recording_or_404(version["recording_id"])
+
+    if request.method == "POST":
+        receipt_no = request.form.get("receipt_no", "").strip()
+        upload = request.files.get("csv_file")
+        fail = request.form.get("simulate_fail") == "1"
+        if upload is None or not upload.filename:
+            flash("请选择回执 CSV 文件", "error")
+            return redirect(url_for("web.acceptance_view", version_id=version_id))
+
+        try:
+            parsed_no, lines = acceptance.parse_receipt_csv(upload.read(), receipt_no)
+        except acceptance.ReceiptError as exc:
+            flash(f"回执解析失败：{exc}", "error")
+            return redirect(url_for("web.acceptance_view", version_id=version_id))
+
+        digest = acceptance.content_hash(lines)
+        try:
+            state, result = db.ingest_receipt(
+                version_id, parsed_no, digest, lines, fail=fail
+            )
+        except acceptance.ReceiptConflict as exc:
+            flash(f"回执冲突：{exc}", "error")
+            return redirect(url_for("web.acceptance_view", version_id=version_id))
+        except (sqlite3.Error, db.ReceiptErrorLike) as exc:
+            flash(f"回执写入失败（{exc}），整份回执与核对结果均已回滚，"
+                  "可修正后以同一回执号重传；原有核对结果不受影响", "error")
+            return redirect(url_for("web.acceptance_view", version_id=version_id))
+
+        if state == "duplicate":
+            flash(f"回执 {parsed_no} 内容相同，已入账过，本次未重复计入", "ok")
+        else:
+            flash(f"回执 {parsed_no} 已入账并完成核对", "ok")
+        return redirect(url_for("web.acceptance_view", version_id=version_id))
+
+    result = _acceptance_payload(version_id)
+    return render_template(
+        "acceptance.html",
+        version=version,
+        recording=recording,
+        result=result,
+        receipts=db.list_receipts(version_id),
+        intervals=db.list_warehouse_intervals(version_id),
+        segments=json.loads(version["segments_json"]),
+        sibling_versions=[
+            v for v in db.list_versions(version["recording_id"])
+            if v["period_start"] == version["period_start"]
+            and v["period_end"] == version["period_end"]
+        ],
+    )
+
+
+@bp.route("/versions/<int:version_id>/acceptance/sample/<role>")
+def acceptance_sample(version_id: int, role: str):
+    version = db.get_version(version_id)
+    if version is None:
+        abort(404)
+    try:
+        text, filename = acceptance.build_sample_csv(version, role)
+    except ValueError:
+        abort(404)
+    return Response(
+        text, mimetype="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@bp.route("/versions/<int:version_id>/acceptance/recheck", methods=["POST"])
+def acceptance_recheck(version_id: int):
+    if db.get_version(version_id) is None:
+        abort(404)
+    db.refresh_acceptance(version_id)
+    flash("已按当前回执与净额区间重新核对（未重放回执）", "ok")
+    return redirect(url_for("web.acceptance_view", version_id=version_id))
+
+
+@bp.route("/api/versions/<int:version_id>/acceptance")
+def acceptance_api(version_id: int):
+    return jsonify(_acceptance_payload(version_id))

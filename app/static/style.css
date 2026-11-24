@@ -37,3 +37,11 @@ button:disabled { background: #9aa7b4; border-color: #9aa7b4; cursor: not-allowe
 .grid2 { display: grid; grid-template-columns: 1fr 1.6fr; gap: 20px; }
 .check { display: inline-flex; gap: 6px; align-items: center; }
 code { font-size: 12px; }
+.diff { color: #8a2b20; font-size: 13px; margin: 2px 0; }
+.row-ok td { background: #f6fdf8; }
+.row-bad td { background: #fff8f7; }
+#acceptance-status strong { font-size: 15px; }
+.inline-form { margin: 10px 0 22px; }
+input[type="file"] { background: #fff; padding: 6px; }
+ul.plain { margin: 4px 0 18px; padding-left: 20px; }
+ul.plain li { margin: 2px 0; }

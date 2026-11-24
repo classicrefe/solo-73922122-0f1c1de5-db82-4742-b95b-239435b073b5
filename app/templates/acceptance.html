@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}仓数据验收 · v{{ version.version_no }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('web.version_show', version_id=version.id) }}">&larr; 返回核定版 v{{ version.version_no }}</a></p>
+<h2>仓数据验收 · {{ recording.title }}</h2>
+<p class="muted">核定版 v{{ version.version_no }} · 结算期 {{ version.period_start }}（含）~ {{ version.period_end }}（不含）
+  · 已入账回执 {{ result.receipt_count }} 份
+  · 仓数据按「录音 + 结算期」留存，发布新版本时沿用同一份实际入账</p>
+
+{% if sibling_versions and sibling_versions|length > 1 %}
+<h3>同结算期其他核定版</h3>
+<p class="muted">仓数据按结算期共享；上传新回执会同时影响下列各版的通过标记。</p>
+<ul>
+{% for v in sibling_versions %}
+  <li>
+    {% if v.id == version.id %}<strong>v{{ v.version_no }}（当前）</strong>{% else %}
+    <a href="{{ url_for('web.acceptance_view', version_id=v.id) }}">v{{ v.version_no }}</a>
+    {% endif %}
+  </li>
+{% endfor %}
+</ul>
+{% endif %}
+
+{% if result.passed %}
+<div class="flash ok" id="acceptance-status">
+  <strong>验收通过</strong>：各区间核定值净条数均为 1，其余值净条数均为 0。
+  {% if result.checked_at %}<span class="muted">核对于 {{ result.checked_at }}</span>{% endif %}
+</div>
+{% else %}
+<div class="flash error" id="acceptance-status">
+  <strong>验收未通过</strong>：共 {{ result.mismatch_count }} 处差异（按区间列出，见下）。
+  {% if result.checked_at %}<span class="muted">核对于 {{ result.checked_at }}</span>{% endif %}
+</div>
+{% endif %}
+
+<h3>上传回执 CSV</h3>
+<form method="post" enctype="multipart/form-data" class="card" id="receipt-form">
+  <label>回执号
+    <input name="receipt_no" placeholder="如 R20260101-01（可不填，若 CSV 每行已含回执号）">
+  </label>
+  <label>回执文件（CSV；表头：回执号,类型,权利人,万分比,起日,止日 或 类型,权利人,万分比,起日,止日）
+    <input type="file" name="csv_file" accept=".csv,text/csv" required>
+  </label>
+  <p class="muted">每行填写「入仓」或「冲销」、权利人、整数万分比、起止日（含起日、不含止日）。
+    冲销可先于入仓回执到达；同号同内容只计一次，同号异内容报冲突。
+    只有同一权利人同日同值的入仓和冲销才相抵。</p>
+  <label class="check"><input type="checkbox" name="simulate_fail" value="1">
+    模拟写入失败（回执与核对结果整体回滚，可原号重传）</label>
+  <div class="actions">
+    <button type="submit">上传并入账</button>
+    <a class="button secondary" href="{{ url_for('web.acceptance_sample', version_id=version.id, role='in') }}">下载入仓样例 CSV</a>
+    <a class="button secondary" href="{{ url_for('web.acceptance_sample', version_id=version.id, role='reverse') }}">下载冲销样例 CSV</a>
+    <a class="button secondary" href="{{ url_for('web.acceptance_sample', version_id=version.id, role='restore') }}">下载补仓样例 CSV</a>
+  </div>
+</form>
+
+<form method="post" action="{{ url_for('web.acceptance_recheck', version_id=version.id) }}" class="inline-form">
+  <span class="muted">核对无需重放回执，直接按当前净额区间重算。</span>
+  <button class="secondary">重新核对</button>
+</form>
+
+<h3>按结算区间核对（核定值 vs 实际净额）</h3>
+<table id="acceptance-intervals">
+  <thead>
+    <tr>
+      <th>区间起日(含)</th><th>区间止日(不含)</th>
+      <th>核定值</th><th>实际各值净条数</th><th>差异</th><th>结果</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for iv in result.intervals %}
+    <tr class="{% if iv.ok %}row-ok{% else %}row-bad{% endif %}">
+      <td>{{ iv.start_date }}</td>
+      <td>{{ iv.end_date }}</td>
+      <td>
+        {% for name, value in iv.approved.items() %}
+          <span class="chip">{{ name }}：{{ value }}</span>
+        {% else %}
+          <span class="muted">（核定版无份额段）</span>
+        {% endfor %}
+      </td>
+      <td>
+        {% for a in iv.actual %}
+          <span class="chip">{{ a.holder }}：{{ a.value }} × {{ a.net_count }}</span>
+        {% else %}
+          <span class="muted">无入账净额</span>
+        {% endfor %}
+      </td>
+      <td>
+        {% for diff in iv.diffs %}
+          <div class="diff">{{ diff.message }}</div>
+        {% else %}
+          <span class="ok">相符</span>
+        {% endfor %}
+      </td>
+      <td>{% if iv.ok %}<span class="ok">通过</span>{% else %}<span class="bad">差异</span>{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="muted">核定版没有可核对的区间。</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h3>净额区间表（同一权利人同值的入仓/冲销相抵后，仅存非零项）</h3>
+<p class="muted">新回执只改写其涉及的权利人、万分比与日期区间；核对直接扫描净额区间与核定分段边界，不重放历史回执。</p>
+<table id="warehouse-intervals">
+  <thead><tr><th>权利人</th><th>万分比</th><th>起日(含)</th><th>止日(不含)</th><th>净条数</th></tr></thead>
+  <tbody>
+  {% for it in intervals %}
+    <tr>
+      <td>{{ it.holder }}</td><td>{{ it.share_value }}</td>
+      <td>{{ it.start_date }}</td><td>{{ it.end_date }}</td>
+      <td>{{ it.net_count }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="muted">暂无入账净额（此时核定值应全部为缺仓差异）。</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h3>已入账回执</h3>
+<table>
+  <thead><tr><th>回执号</th><th>行数</th><th>内容指纹</th><th>入账时间</th></tr></thead>
+  <tbody>
+  {% for r in receipts %}
+    <tr>
+      <td>{{ r.receipt_no }}</td>
+      <td>{{ r.line_count }}</td>
+      <td><code>{{ r.content_sha[:16] }}…</code></td>
+      <td>{{ r.received_at }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4" class="muted">暂无回执。</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<p class="actions">
+  <a class="button" href="{{ url_for('web.acceptance_api', version_id=version.id) }}">验收结果 JSON</a>
+  <a class="button secondary" href="{{ url_for('web.version_show', version_id=version.id) }}">返回核定版</a>
+</p>
+{% endblock %}
